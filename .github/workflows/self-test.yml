@@ -1,0 +1,40 @@
+name: Self-test
+
+# Testet die wiederverwendbaren Workflows dieses Repos gegen ein kleines Fixture-Crate
+# und prüft die Workflow-Dateien mit actionlint.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.7 -color
+
+  rust:
+    uses: ./.github/workflows/rust.yml
+    with:
+      working-directory: fixtures/hello
+      msrv: "1.85"
+      os: '["ubuntu-latest", "windows-latest"]'
+
+  security:
+    uses: ./.github/workflows/rust-security.yml
+    with:
+      manifest-path: ./fixtures/hello/Cargo.toml

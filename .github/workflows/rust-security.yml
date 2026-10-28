@@ -1,0 +1,46 @@
+name: Rust security
+
+# Wiederverwendbarer Workflow: cargo-deny (Advisories, Lizenzen, Bans, Quellen).
+# Erwartet eine deny.toml im Projekt (liegt im rust-template).
+#
+# Aufruf aus einem Projekt (.github/workflows/security.yml):
+#
+#   on:
+#     pull_request:
+#     schedule:
+#       - cron: "23 5 * * 1"
+#   jobs:
+#     deny:
+#       uses: DavidFrings/rust-ci/.github/workflows/rust-security.yml@v1
+
+on:
+  workflow_call:
+    inputs:
+      manifest-path:
+        description: "Pfad zur Cargo.toml relativ zum Repo-Root, beginnend mit ./"
+        type: string
+        default: "./Cargo.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    name: deny (${{ matrix.checks }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        checks: ["advisories", "bans licenses sources"]
+    # Ein neu veröffentlichtes Advisory soll keine unbeteiligten PRs blockieren.
+    # Im geplanten Lauf (schedule) schlägt es dagegen fehl und fällt damit auf.
+    continue-on-error: ${{ matrix.checks == 'advisories' && github.event_name != 'schedule' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}
+          manifest-path: ${{ inputs.manifest-path }}

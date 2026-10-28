@@ -1,0 +1,198 @@
+name: Rust
+
+# Wiederverwendbarer Workflow: fmt, clippy, test, doc und optional MSRV.
+#
+# Aufruf aus einem Projekt (.github/workflows/ci.yml):
+#
+#   jobs:
+#     rust:
+#       uses: DavidFrings/rust-ci/.github/workflows/rust.yml@v1
+#       with:
+#         msrv: "1.85"
+#
+# Der Job "result" ist der einzige, den ein Branch-Ruleset als Pflicht-Check
+# braucht: er fasst alle anderen Jobs zusammen.
+
+on:
+  workflow_call:
+    inputs:
+      toolchain:
+        description: "Rust-Toolchain für fmt, clippy, test und doc (stable, beta, nightly oder z. B. 1.90)"
+        type: string
+        default: stable
+      msrv:
+        description: "Minimal unterstützte Rust-Version, z. B. 1.85. Leer = MSRV-Job entfällt"
+        type: string
+        default: ""
+      working-directory:
+        description: "Verzeichnis mit der Cargo.toml bzw. dem Workspace-Root"
+        type: string
+        default: "."
+      os:
+        description: 'JSON-Liste der Runner für den Test-Job, z. B. ["ubuntu-latest","windows-latest"]'
+        type: string
+        default: '["ubuntu-latest"]'
+      locked:
+        description: "Mit --locked bauen. Cargo.lock muss dann eingecheckt und aktuell sein"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  TOOLCHAIN: ${{ inputs.toolchain }}
+  # Absichtlich unquotiert verwendet: leer = Flag entfällt
+  LOCKED: ${{ inputs.locked && '--locked' || '' }}
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        # bash auch unter Windows, damit alle Schritte überall gleich laufen
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install toolchain
+        run: rustup toolchain install "$TOOLCHAIN" --profile minimal --component rustfmt --no-self-update
+      - name: cargo fmt
+        run: cargo +"$TOOLCHAIN" fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        # bash auch unter Windows, damit alle Schritte überall gleich laufen
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install toolchain
+        run: rustup toolchain install "$TOOLCHAIN" --profile minimal --component clippy --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ inputs.working-directory }}
+      # Welche Lints gelten, steht in der [lints]-Tabelle der Cargo.toml.
+      # Lokal sind es Warnungen, hier in der CI werden sie zu Fehlern.
+      - name: cargo clippy
+        run: |
+          # LOCKED bleibt absichtlich unquotiert: leer = Flag entfällt
+          # shellcheck disable=SC2086
+          cargo +"$TOOLCHAIN" clippy --workspace --all-targets --all-features $LOCKED -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        # bash auch unter Windows, damit alle Schritte überall gleich laufen
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install toolchain
+        run: rustup toolchain install "$TOOLCHAIN" --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ inputs.working-directory }}
+      # `cargo test` führt bei Libraries auch die Doctests aus
+      - name: cargo test
+        run: |
+          # LOCKED bleibt absichtlich unquotiert: leer = Flag entfällt
+          # shellcheck disable=SC2086
+          cargo +"$TOOLCHAIN" test --workspace --all-features $LOCKED
+
+  doc:
+    name: doc
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        # bash auch unter Windows, damit alle Schritte überall gleich laufen
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      # Kaputte Doc-Links und andere rustdoc-Warnungen sollen die CI brechen
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install toolchain
+        run: rustup toolchain install "$TOOLCHAIN" --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ inputs.working-directory }}
+      - name: cargo doc
+        run: |
+          # LOCKED bleibt absichtlich unquotiert: leer = Flag entfällt
+          # shellcheck disable=SC2086
+          cargo +"$TOOLCHAIN" doc --workspace --no-deps --all-features $LOCKED
+
+  msrv:
+    name: msrv
+    if: ${{ inputs.msrv != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        # bash auch unter Windows, damit alle Schritte überall gleich laufen
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      MSRV: ${{ inputs.msrv }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install MSRV toolchain
+        run: rustup toolchain install "$MSRV" --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ inputs.working-directory }}
+      # Nur Library- und Binary-Code: Tests und Dev-Dependencies dürfen neuer sein
+      - name: cargo check (MSRV)
+        run: |
+          # LOCKED bleibt absichtlich unquotiert: leer = Flag entfällt
+          # shellcheck disable=SC2086
+          cargo +"$MSRV" check --workspace --all-features $LOCKED
+
+  result:
+    name: result
+    if: ${{ always() }}
+    needs: [fmt, clippy, test, doc, msrv]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Evaluate results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          if [[ "$RESULTS" =~ (failure|cancelled) ]]; then
+            echo "::error::At least one job failed or was cancelled"
+            exit 1
+          fi
